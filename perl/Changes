@@ -1,0 +1,8 @@
+Revision history for SMS-Send-UK-Kapow
+
+0.02    25 January 2009
+        Doc fix and require MIME::Lite for email.
+
+0.01    23 January 2009
+        First version.
+
