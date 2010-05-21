@@ -8,15 +8,12 @@ use Carp;
 
 SMS::Send::UK::Kapow - SMS::Send driver for the Kapow.co.uk website
 
-=head1 VERSION
-
-his document describes SMS::Send::UK::Kapow Version 0.02
-
 =cut
 
+use SMS::Send::Driver            ();
 use base 'SMS::Send::Driver';
 use version;
-our $VERSION = qv('0.02');
+our $VERSION = qv('0.06');
 use URI::Escape;
 
 =head1 SYNOPSIS
@@ -27,14 +24,16 @@ use URI::Escape;
                _login    => 'my-kapow-username',   # normally required, see below (synonymous with _user) 
                _password => 'my-kapow-password',   # normally required, see below
                _send_via => 'http',                # optional, can be http, https or email, default is http
-               _http_method => 'post',             # optional, the http method to use for http & https. 
-                                                   #                           get or post, default get.
+               _http_method => 'get',              # optional, the http method to use for http & https. 
+                                                   #                           get or post, default post.
                _email_via => 'sendmail',           # optional, for use when 'email' is used. can be 
                                                    #                            'sendmail' or 'smtp'
                _url      => 'http://foo.com/done'  # optional url to call after sending, for http and https
                _from     => 'me@mydomain.com',     # optional, for use when 'email' is used in send_via 
                _from_id  => 'my-kapow-id',         # optional message originator, if enabled for your account
                _route    => '840101',              # optional shortcode for premium sms reverse billing
+               _wait     => 0,                     # optional, supply a defined but false value to stop the
+                                                   #     module from trying to confirm delivery. default true.
            );
 
     my $sent = $sender->send_sms(
@@ -43,6 +42,9 @@ use URI::Escape;
         _url      => 'http://foo.com/done123',       # optional url per message to call after sending 
                                                      #                                 (for http and https)
         _from     => 'me@mydomain.com',              # optional from address per message (for email)
+        _from_id  => 'my-kapow-id',                  # optional message originator per message
+        _route    => '840101',                       # optional shortcode per message for reverse billing
+        _wait     => 0,                              # optional per message control of delivery checks.
     );
 
     # Did it send to Kapow ok?
@@ -52,11 +54,11 @@ use URI::Escape;
       print "Test message failed\n";
     }
 
-    # What's the status of the last message we sent? (available for http & https methods)
-    my $status = $sender->send_status;
+    # What's the delivery status of the last message we sent? (available for http & https methods)
+    my $status = $sender->delivery_status;
 
-    # What's the status for an arbitrary message we sent in the past?
-    my $status = $sender->send_status($sent);
+    # What's the delivery status for an arbitrary message we sent in the past?
+    my $status = $sender->delivery_status($sent);
 
 =head1 DESCRIPTION
 
@@ -120,22 +122,18 @@ and it will instead send an email message to Kapow to issue the SMS
 message. Note that using email means you lose the delivery tracking
 features of the http/s methods.
 
-To use the email method you need the MIME::Lite module installed.
-
 =item _http_method
 
 The C<_http_method> param is relevant when using http or https to send
 your messages and specifies whether to use 'get' or 'post' methods
-when issuing the request to Kapow. This defaults to 'get' but can be
-changed to 'post' if desired.
+when issuing the request to Kapow. This defaults to 'post' but can be
+changed to 'get' if desired.
 
 =item _email_via
 
 The C<_email_via> param is relevant when using email to send the
-messages. With the MIME::Lite module installed you can control how
-email messages are generated. Valid values for this param are 
-'sendmail' and 'smtp'. The default is 'sendmail' except on Windows, 
-where the default is 'smtp'.
+messages. Valid values for this param are 'sendmail' and 'smtp'. The
+default is 'sendmail' except on Windows, where the default is 'smtp'.
 
 =item _url
 
@@ -166,42 +164,41 @@ SMS service to reverse-bill recipients for sending an SMS message. If
 you have purchased this feature from Kapow for your account then you
 can control it using this parameter.
 
+=item _wait
+
+The C<_wait> param is relevant when using http or https to send your
+messages. The SMS::Send specification dictates that if a message can
+have its delivery checked & confirmed then the driver module should do
+that automatically at the time the message is sent. This means that if
+you use http/s to send your messages then the system will wait for up
+to 10 seconds trying to validate that the message has gone. If you want
+to override this behaviour then supply a defined-but-false value for
+this param, such as 0 or the empty string.
+
+Note that if you do suppress the automatic checking as described above
+then you can still check the state of delivery of each message using 
+the delivery_status() method.
+
 =back
 
 Returns a new C<SMS::Send::UK::Kapow> object, or dies on error.
 
 =cut
 
-eval { require LWP::UserAgent };
-my $HAS_UA = ! $@;
-
-eval { require MIME::Lite };
-my $HAS_MIMELITE = ! $@;
+use LWP::UserAgent;
+use MIME::Lite;
 
 my $IS_WINDOWS   = ($^O eq 'MSWin32');
 
 sub new
 {
     my $class    = shift;
-    my %opts     = (_send_via => 'http', _http_method => 'get',
+    my %opts     = (_send_via => 'http', _http_method => 'post',
+		    _wait     => 1,
 		    @_);
 
-    $opts{ua} = $HAS_UA        ? LWP::UserAgent->new : undef;
-    $opts{ml} = $HAS_MIMELITE;
+    $opts{ua} = LWP::UserAgent->new;
 
-    # sanity check the method we'll use 
-    if (substr($opts{_send_via},0,4) eq 'http')
-    {
-	if (! $opts{ua})
-	{
-	    Carp::croak "You must install the LWP::UserAgent module to send SMS messages by http or https";
-	}
-    }
-    elsif (! $opts{ml})
-    {
-	Carp::croak "You must install the MIME::Lite module before you can issue SMS messages by email";
-    }
-    
     return bless \%opts, ref($class) || $class;
 }
 
@@ -218,12 +215,7 @@ sub new
 =item _to
 
 The required C<_to> param should contain the phone number for the
-recipient. This should be in international format with the country
-code first. The number may optionally be prefixed with a + sign which
-will be removed before sending the request to Kapow.
-
-If a number begins with '07' then that is converted to '447'. This is
-relevant to users in the UK.
+recipient. See the SMS::Send documentation for acceptable formats.
 
 =item _text
 
@@ -245,6 +237,24 @@ The C<_from> param is optional and can be used to provide an email
 from address specific to this message. See above for a complete
 description.
 
+=item _from_id
+
+The C<_from_id> param is optional and can be used to provide a mesage
+originator specific to this message. See above for a complete
+description.
+
+=item _route
+
+The C<_route> param is optional and can be used to provide a reverse
+billing shortcode specific to this message. See above for a complete
+description.
+
+=item _wait
+
+The C<_wait> param is optional and can be used to suppress the automatic
+delivery confirmation stage on a per-message basis. See above for a 
+complete description.
+
 =back
 
 =cut
@@ -260,7 +270,6 @@ sub send_sms
     }
 
     $opts{to}   =~ s/^\+//s;
-    $opts{to}   =~ s/^07/447/s;
     $opts{text} =~ tr/\r\n/  /s;
 
     if (substr($self->{_send_via},0,4) eq 'http')
@@ -272,7 +281,7 @@ sub send_sms
 	    Carp::croak "To send messages using http/s you must provide a Kapow username and password";
 	}
 	my $protocol       = $self->{_send_via}    || 'http';
-	my $request_method = $self->{_http_method} || 'get';
+	my $request_method = $self->{_http_method} || 'post';
 
 	my $response = do
 	{
@@ -282,9 +291,9 @@ sub send_sms
 			  password => $self->{_password} || "",
 			  mobile   => $opts{to}          || "",
 			  sms      => $opts{text}        || "",
-			  from_id  => $self->{_from_id}  || undef,
-			  route    => $self->{_route}    || undef,
-			  url      => $opts{_url} || $self->{_url} || undef,
+			  from_id  => $opts{_from_id}    || $self->{_from_id}  || undef,
+			  route    => $opts{_route}      || $self->{_route}    || undef,
+			  url      => $opts{_url}        || $self->{_url}      || undef,
 			  returnid => 'TRUE', # enable message delivery tracking
 		);
 		    
@@ -315,6 +324,29 @@ sub send_sms
 		$self->{_new_credits_balance} = $num_credits;
 		$self->{_msg_delivery_id}     = $unique_id;
 		$self->{_sent_at}             = time();
+
+		# check delivery status, unless disabled
+		my $check_delivery_status = 1; # default true
+
+		if    (defined($opts{_wait})    and ! $opts{_wait})   { undef $check_delivery_status }
+		elsif (defined($self->{_wait})  and ! $self->{_wait}) { undef $check_delivery_status }
+
+		if ($check_delivery_status)
+		{
+		  wait_for_success: 
+		    for (1..10)
+		    {
+			my $reply = $self->delivery_status;
+			
+			if ($reply and substr($reply,0,1) ne 'N')
+			{
+			    $self->{_delivered_at} = time();
+			    last wait_for_success;
+			}
+			sleep 1 if $_ < 10; # wait and try again
+		    }
+		}
+		
 		return $unique_id;
 	    }
 	    else # request went through but message not accepted
@@ -334,10 +366,6 @@ sub send_sms
     }
     elsif ($self->{_send_via} eq 'email')
     {
-	if (! $self->{ml}) # no mime::lite
-	{
-	    Carp::croak "Cannot send SMS messages by email without MIME::Lite installed";
-	}
 	my $send_method = $self->{_email_via} || ($IS_WINDOWS ? 'smtp' : 'sendmail');
 
 	my $sms         = $opts{text} || "";
@@ -357,28 +385,31 @@ sub send_sms
 	{
 	    $options{From} = $from;
 	}
+	my $message_as_string = "";
 
 	eval
 	{
-	    MIME::Lite->new(%options)->send($send_method);
+	    my $msg = MIME::Lite->new(%options);
+	    $message_as_string = $msg->as_string;
+	    $msg->send($send_method);
 	};
 	if ($@)
 	{
 	    Carp::carp $@;
 	    return;
 	}
-	else { $self->{_sent_at} = time(); return 1 } # send and forget
+	else { $self->{_sent_at} = time(); return $message_as_string } # send and forget
     }
     return;
 }
 
-=head2 send_status
+=head2 delivery_status
 
-    # What's the status of the last message we sent? (available for http & https methods)
-    my $status = $sender->send_status;
+    # What's the delivery status of the last message we sent? (available for http & https methods)
+    my $status = $sender->delivery_status;
 
-    # What's the status for an arbitrary message we sent in the past? (pass it the return value of the send_sms method)
-    my $status = $sender->send_status($sent);
+    # What's the delivery status for an arbitrary message we sent in the past? (pass it the return value of the send_sms method)
+    my $status = $sender->delivery_status($sent);
 
 For messages sent via http/s you can check the delivery status of the
 message by calling this method. If called with no parameters then the
@@ -394,15 +425,15 @@ Messages sent by email cannot be checked for their delivery status.
 
 =cut
 
-sub send_status
+sub delivery_status
 {
     my $self        = shift;
     my $unique_id   = shift || $self->{_msg_delivery_id} 
-    or Carp::croak "No message available for checking send_status";
+    or Carp::croak "No message available for checking delivery_status";
 
     if (not defined $self->{ua})
     {
-	Carp::croak "No user-agent available for checking send_status";
+	Carp::croak "No user-agent available for checking delivery_status";
     }
 
     my $protocol      = $self->{_send_via}      || 'http';
@@ -430,6 +461,19 @@ sub send_status
     return;
 }
 
+=head2 send_status
+
+The send_status method is an alias for delivery_status, provided for
+backward-compatibility.
+
+=cut
+
+sub send_status
+{
+    my $self = shift;
+    return $self->delivery_status(@_);
+}
+
 =head1 AUTHOR
 
 Jeremy Jones, C<< <jjones at cpan.org> >>
@@ -446,32 +490,10 @@ You can find documentation for this module with the perldoc command.
     perldoc SMS::Send::UK::Kapow
 
 
-You can also look for information at:
-
-=over 4
-
-=item * RT: CPAN's request tracker
-
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=SMS-Send-Kapow>
-
-=item * AnnoCPAN: Annotated CPAN documentation
-
-L<http://annocpan.org/dist/SMS-Send-Kapow>
-
-=item * CPAN Ratings
-
-L<http://cpanratings.perl.org/d/SMS-Send-Kapow>
-
-=item * Search CPAN
-
-L<http://search.cpan.org/dist/SMS-Send-Kapow/>
-
-=back
-
 =head1 ACKNOWLEDGEMENTS
 
 Adam Kennedy's SMS::Send module and Andrew Moore's
-SMS::Send::US::Ipipi module were used in developing this one.
+SMS::Send::US::Ipipi module were useful for writing this one.
 
 =head1 COPYRIGHT & LICENSE
 

@@ -28,21 +28,6 @@ perldoc command.
 
     perldoc SMS::Send::UK::Kapow
 
-You can also look for information at:
-
-    RT, CPAN's request tracker
-        http://rt.cpan.org/NoAuth/Bugs.html?Dist=SMS-Send-UK-Kapow
-
-    AnnoCPAN, Annotated CPAN documentation
-        http://annocpan.org/dist/SMS-Send-UK-Kapow
-
-    CPAN Ratings
-        http://cpanratings.perl.org/d/SMS-Send-UK-Kapow
-
-    Search CPAN
-        http://search.cpan.org/dist/SMS-Send-UK-Kapow/
-
-
 COPYRIGHT AND LICENCE
 
 Copyright (C) 2009 Jeremy Jones
