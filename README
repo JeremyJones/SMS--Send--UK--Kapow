@@ -1,0 +1,5 @@
+
+This is a Perl module which allows you to access & use your
+Kapow.co.uk account programmatically through Perl.
+
+It's available on CPAN as SMS::Send::UK::Kapow.
